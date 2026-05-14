@@ -6,8 +6,7 @@ import pandas as pd
 import streamlit as st
 from rdkit import Chem
 from rdkit.Chem import rdMolTransforms
-from rdkit.Chem import rdDepictor
-from rdkit.Chem.Draw import rdMolDraw2D
+from rdkit.Chem import Draw
 
 
 APP_VERSION = "ver. 1.2"
@@ -129,17 +128,12 @@ def make_atom_index_preview(mol):
     return pd.DataFrame(rows)
 
 
-def make_numbered_molecule_svg(mol, numbering_mode, width=700, height=500):
+def make_numbered_molecule_image(mol, numbering_mode, width=800, height=550):
     """
-    Draw the first conformer as a 2D molecule with atom numbers.
+    Draw the first conformer as a 2D molecule with atom indices.
     The original 3D coordinates are not modified for calculations.
     """
     mol2d = Chem.Mol(mol)
-
-    try:
-        rdDepictor.Compute2DCoords(mol2d)
-    except Exception:
-        pass
 
     for atom in mol2d.GetAtoms():
         idx0 = atom.GetIdx()
@@ -151,16 +145,13 @@ def make_numbered_molecule_svg(mol, numbering_mode, width=700, height=500):
 
         atom.SetProp("atomNote", label)
 
-    drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
-    options = drawer.drawOptions()
-    options.addAtomIndices = False
-    options.addStereoAnnotation = True
+    image = Draw.MolToImage(
+        mol2d,
+        size=(width, height),
+        kekulize=False,
+    )
 
-    rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol2d)
-    drawer.FinishDrawing()
-
-    svg = drawer.GetDrawingText()
-    return svg.replace("svg:", "")
+    return image
 
 
 def calculate_dihedrals(
@@ -432,14 +423,14 @@ col_fig, col_select = st.columns([1.2, 1])
 with col_fig:
     st.subheader("First conformer with atom numbers")
 
-    svg = make_numbered_molecule_svg(
-        first_mol,
-        numbering_mode=numbering_mode,
-        width=800,
-        height=550,
-    )
+mol_image = make_numbered_molecule_image(
+    first_mol,
+    numbering_mode=numbering_mode,
+    width=800,
+    height=550,
+)
 
-    st.image(svg, use_container_width=True)
+st.image(mol_image, use_container_width=True)
 
     st.caption(
         "The diagram is generated from the first conformer. "
