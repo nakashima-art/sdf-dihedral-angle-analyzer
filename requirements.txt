@@ -1,4 +1,4 @@
 streamlit
 pandas
 altair
-rdkit-pypi
+rdkit
