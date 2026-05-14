@@ -6,10 +6,9 @@ import pandas as pd
 import streamlit as st
 from rdkit import Chem
 from rdkit.Chem import rdMolTransforms
-from rdkit.Chem import Draw
 
 
-APP_VERSION = "ver. 1.2"
+APP_VERSION = "ver. 1.1"
 
 
 # =========================
@@ -17,6 +16,18 @@ APP_VERSION = "ver. 1.2"
 # =========================
 
 def parse_atom_numbers_from_line(line, expected_count):
+    """
+    Parse atom numbers from one line.
+
+    Accepted formats:
+        torsion_A: 5-6-7-8
+        torsion_A: 5, 6, 7, 8
+        torsion_A: 5 6 7 8
+        5-6-7-8
+
+    Returns:
+        name, atom_numbers
+    """
     line = line.strip()
 
     if not line or line.startswith("#"):
@@ -30,7 +41,6 @@ def parse_atom_numbers_from_line(line, expected_count):
         atom_part = line
 
     nums = re.findall(r"\d+", atom_part)
-
     if len(nums) != expected_count:
         raise ValueError(
             f"Line '{line}' must contain exactly {expected_count} atom numbers."
@@ -42,6 +52,9 @@ def parse_atom_numbers_from_line(line, expected_count):
 
 
 def parse_definitions(text, expected_count, default_prefix):
+    """
+    Parse multiple definition lines.
+    """
     definitions = []
 
     for line_no, line in enumerate(text.splitlines(), start=1):
@@ -71,6 +84,9 @@ def parse_definitions(text, expected_count, default_prefix):
 
 
 def convert_to_zero_based(atom_numbers, numbering_mode):
+    """
+    Convert user-specified atom numbers to RDKit 0-based atom indices.
+    """
     if numbering_mode == "1-based atom numbers":
         return [x - 1 for x in atom_numbers]
 
@@ -78,19 +94,29 @@ def convert_to_zero_based(atom_numbers, numbering_mode):
 
 
 def classify_dihedral(angle_deg, syn_tol, anti_tol):
-    if abs(angle_deg) <= syn_tol:
+    """
+    Simple classification of dihedral angle.
+
+    angle_deg is in -180 to +180.
+    """
+    angle = angle_deg
+
+    if abs(angle) <= syn_tol:
         return "syn/cis-like"
 
-    if abs(abs(angle_deg) - 180.0) <= anti_tol:
+    if abs(abs(angle) - 180.0) <= anti_tol:
         return "anti/trans-like"
 
-    if angle_deg > 0:
+    if angle > 0:
         return "gauche-like (+)"
 
     return "gauche-like (-)"
 
 
 def get_mol_name(mol, index):
+    """
+    Get conformer name from SDF.
+    """
     if mol.HasProp("_Name") and mol.GetProp("_Name").strip():
         return mol.GetProp("_Name").strip()
 
@@ -98,6 +124,9 @@ def get_mol_name(mol, index):
 
 
 def mol_properties_to_dict(mol):
+    """
+    Extract SDF properties.
+    """
     props = {}
 
     for prop_name in mol.GetPropNames():
@@ -110,6 +139,9 @@ def mol_properties_to_dict(mol):
 
 
 def make_atom_index_preview(mol):
+    """
+    Create atom-index preview table for the first molecule.
+    """
     rows = []
 
     for atom in mol.GetAtoms():
@@ -128,32 +160,6 @@ def make_atom_index_preview(mol):
     return pd.DataFrame(rows)
 
 
-def make_numbered_molecule_image(mol, numbering_mode, width=800, height=550):
-    """
-    Draw the first conformer as a 2D molecule with atom indices.
-    The original 3D coordinates are not modified for calculations.
-    """
-    mol2d = Chem.Mol(mol)
-
-    for atom in mol2d.GetAtoms():
-        idx0 = atom.GetIdx()
-
-        if numbering_mode == "1-based atom numbers":
-            label = str(idx0 + 1)
-        else:
-            label = str(idx0)
-
-        atom.SetProp("atomNote", label)
-
-    image = Draw.MolToImage(
-        mol2d,
-        size=(width, height),
-        kekulize=False,
-    )
-
-    return image
-
-
 def calculate_dihedrals(
     mols,
     dihedral_definitions,
@@ -163,14 +169,21 @@ def calculate_dihedrals(
     syn_tol,
     anti_tol,
 ):
+    """
+    Calculate dihedral angles for all conformers.
+    """
     rows = []
 
     for i, mol in enumerate(mols):
-        if mol is None or mol.GetNumConformers() == 0:
+        if mol is None:
+            continue
+
+        if mol.GetNumConformers() == 0:
             continue
 
         conf = mol.GetConformer()
         mol_name = get_mol_name(mol, i)
+
         props = mol_properties_to_dict(mol) if include_props else {}
 
         for definition in dihedral_definitions:
@@ -201,9 +214,7 @@ def calculate_dihedrals(
 
             if add_classification:
                 row["classification"] = classify_dihedral(
-                    angle,
-                    syn_tol=syn_tol,
-                    anti_tol=anti_tol,
+                    angle, syn_tol=syn_tol, anti_tol=anti_tol
                 )
 
             row.update(props)
@@ -218,14 +229,21 @@ def calculate_distances(
     numbering_mode,
     include_props,
 ):
+    """
+    Calculate atom-atom distances for all conformers.
+    """
     rows = []
 
     for i, mol in enumerate(mols):
-        if mol is None or mol.GetNumConformers() == 0:
+        if mol is None:
+            continue
+
+        if mol.GetNumConformers() == 0:
             continue
 
         conf = mol.GetConformer()
         mol_name = get_mol_name(mol, i)
+
         props = mol_properties_to_dict(mol) if include_props else {}
 
         for definition in distance_definitions:
@@ -241,9 +259,7 @@ def calculate_distances(
                 )
 
             distance = rdMolTransforms.GetBondLength(
-                conf,
-                atom_indices[0],
-                atom_indices[1],
+                conf, atom_indices[0], atom_indices[1]
             )
 
             row = {
@@ -263,55 +279,31 @@ def calculate_distances(
 
 
 def make_wide_table(df, value_column):
+    """
+    Convert long table to wide table.
+    """
     if df.empty:
         return pd.DataFrame()
 
+    base_cols = ["conformer_index", "conformer_name"]
+
     wide = df.pivot_table(
-        index=["conformer_index", "conformer_name"],
+        index=base_cols,
         columns="name",
         values=value_column,
         aggfunc="first",
     ).reset_index()
 
     wide.columns.name = None
+
     return wide
 
 
 def convert_df_to_csv_bytes(df):
+    """
+    Convert dataframe to CSV bytes.
+    """
     return df.to_csv(index=False).encode("utf-8-sig")
-
-
-def definitions_to_text(definitions):
-    lines = []
-
-    for d in definitions:
-        atoms = "-".join(map(str, d["atoms_input"]))
-        lines.append(f"{d['name']}: {atoms}")
-
-    return "\n".join(lines)
-
-
-def get_atom_options(mol, numbering_mode):
-    options = []
-
-    for atom in mol.GetAtoms():
-        idx0 = atom.GetIdx()
-        atom_no = idx0 + 1 if numbering_mode == "1-based atom numbers" else idx0
-        label = f"{atom_no}: {atom.GetSymbol()}"
-        options.append((atom_no, label))
-
-    return options
-
-
-# =========================
-# Session state
-# =========================
-
-if "dihedral_defs_interactive" not in st.session_state:
-    st.session_state.dihedral_defs_interactive = []
-
-if "distance_defs_interactive" not in st.session_state:
-    st.session_state.distance_defs_interactive = []
 
 
 # =========================
@@ -328,11 +320,12 @@ st.title("SDF Dihedral Angle Analyzer")
 st.caption(APP_VERSION)
 
 st.write(
-    "Upload an SDF file containing multiple conformers. "
-    "The first conformer is drawn with atom numbers, and you can select atoms "
-    "for dihedral angles or atom-atom distances using dropdown menus."
+    "Upload an SDF file containing multiple conformers, define one or more "
+    "dihedral angles and/or atom-atom distances, and calculate them for all "
+    "conformers at once."
 )
 
+# Sidebar
 st.sidebar.header("Input settings")
 
 numbering_mode = st.sidebar.radio(
@@ -346,11 +339,35 @@ numbering_mode = st.sidebar.radio(
     ),
 )
 
+dihedral_text = st.sidebar.text_area(
+    "Dihedral definitions",
+    value="torsion_A: 5-6-7-8\n# torsion_B: 10, 11, 12, 13",
+    height=120,
+    help=(
+        "Define one dihedral per line using four atom numbers. "
+        "Examples: torsion_A: 5-6-7-8 or torsion_B: 10, 11, 12, 13."
+    ),
+)
+
+distance_text = st.sidebar.text_area(
+    "Distance definitions",
+    value="distance_A: 5-8\n# distance_B: 10, 13",
+    height=100,
+    help=(
+        "Define one atom-atom distance per line using two atom numbers. "
+        "Examples: distance_A: 5-8 or distance_B: 10, 13."
+    ),
+)
+
 st.sidebar.header("Options")
 
 sanitize = st.sidebar.checkbox(
     "Sanitize SDF while reading",
     value=False,
+    help=(
+        "If reading fails, try turning this off. For conformer geometry analysis, "
+        "sanitization is often not necessary."
+    ),
 )
 
 include_props = st.sidebar.checkbox(
@@ -360,7 +377,7 @@ include_props = st.sidebar.checkbox(
 
 show_atom_preview = st.sidebar.checkbox(
     "Show atom-index preview for the first molecule",
-    value=False,
+    value=True,
 )
 
 add_classification = st.sidebar.checkbox(
@@ -389,178 +406,7 @@ uploaded_file = st.file_uploader(
     type=["sdf"],
 )
 
-if not uploaded_file:
-    st.info("Upload an SDF file to start.")
-    st.stop()
-
-# Read SDF
-sdf_text = uploaded_file.getvalue().decode("utf-8", errors="replace")
-
-supplier = Chem.ForwardSDMolSupplier(
-    StringIO(sdf_text),
-    sanitize=sanitize,
-    removeHs=False,
-)
-
-mols = [mol for mol in supplier if mol is not None]
-
-if len(mols) == 0:
-    st.error("No valid molecules were read from the SDF file.")
-    st.stop()
-
-st.success(f"Successfully read {len(mols)} conformer(s) from the SDF file.")
-
-first_mol = mols[0]
-
-# =========================
-# Molecule drawing and interactive selection
-# =========================
-
-st.header("1. Select atoms using the numbered molecule diagram")
-
-col_fig, col_select = st.columns([1.2, 1])
-
-with col_fig:
-    st.subheader("First conformer with atom numbers")
-
-mol_image = make_numbered_molecule_image(
-    first_mol,
-    numbering_mode=numbering_mode,
-    width=800,
-    height=550,
-)
-
-st.image(mol_image, use_container_width=True)
-
-    st.caption(
-        "The diagram is generated from the first conformer. "
-        "Calculations are performed using the original 3D coordinates in the SDF file."
-    )
-
-with col_select:
-    st.subheader("Add a measurement")
-
-    atom_options = get_atom_options(first_mol, numbering_mode)
-    atom_numbers = [x[0] for x in atom_options]
-    atom_labels = {x[0]: x[1] for x in atom_options}
-
-    measurement_type = st.radio(
-        "Measurement type",
-        ["Dihedral angle", "Atom-atom distance"],
-        horizontal=True,
-    )
-
-    measurement_name = st.text_input(
-        "Measurement name",
-        value=(
-            f"torsion_{len(st.session_state.dihedral_defs_interactive) + 1}"
-            if measurement_type == "Dihedral angle"
-            else f"distance_{len(st.session_state.distance_defs_interactive) + 1}"
-        ),
-    )
-
-    def format_atom(x):
-        return atom_labels.get(x, str(x))
-
-    if measurement_type == "Dihedral angle":
-        st.write("Select four atoms in the order A–B–C–D.")
-        st.caption("The central bond is B–C.")
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        with c1:
-            a1 = st.selectbox("Atom A", atom_numbers, format_func=format_atom, key="dih_a1")
-        with c2:
-            a2 = st.selectbox("Atom B", atom_numbers, format_func=format_atom, key="dih_a2")
-        with c3:
-            a3 = st.selectbox("Atom C", atom_numbers, format_func=format_atom, key="dih_a3")
-        with c4:
-            a4 = st.selectbox("Atom D", atom_numbers, format_func=format_atom, key="dih_a4")
-
-        if st.button("Add dihedral angle"):
-            selected = [a1, a2, a3, a4]
-
-            if len(set(selected)) < 4:
-                st.warning("Please select four different atoms.")
-            else:
-                st.session_state.dihedral_defs_interactive.append(
-                    {
-                        "name": measurement_name.strip() or f"torsion_{len(st.session_state.dihedral_defs_interactive) + 1}",
-                        "atoms_input": selected,
-                        "line_no": len(st.session_state.dihedral_defs_interactive) + 1,
-                    }
-                )
-                st.rerun()
-
-    else:
-        st.write("Select two atoms for the distance measurement.")
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-            a1 = st.selectbox("Atom A", atom_numbers, format_func=format_atom, key="dist_a1")
-        with c2:
-            a2 = st.selectbox("Atom B", atom_numbers, format_func=format_atom, key="dist_a2")
-
-        if st.button("Add atom-atom distance"):
-            selected = [a1, a2]
-
-            if len(set(selected)) < 2:
-                st.warning("Please select two different atoms.")
-            else:
-                st.session_state.distance_defs_interactive.append(
-                    {
-                        "name": measurement_name.strip() or f"distance_{len(st.session_state.distance_defs_interactive) + 1}",
-                        "atoms_input": selected,
-                        "line_no": len(st.session_state.distance_defs_interactive) + 1,
-                    }
-                )
-                st.rerun()
-
-    st.divider()
-
-    if st.button("Clear all selected measurements"):
-        st.session_state.dihedral_defs_interactive = []
-        st.session_state.distance_defs_interactive = []
-        st.rerun()
-
-# =========================
-# Manual input option
-# =========================
-
-st.header("2. Confirm or edit measurement definitions")
-
-st.write(
-    "You can use the interactive selections above, or manually edit/add definitions below."
-)
-
-default_dihedral_text = definitions_to_text(st.session_state.dihedral_defs_interactive)
-default_distance_text = definitions_to_text(st.session_state.distance_defs_interactive)
-
-col_manual1, col_manual2 = st.columns(2)
-
-with col_manual1:
-    dihedral_text = st.text_area(
-        "Dihedral definitions",
-        value=default_dihedral_text,
-        height=160,
-        help=(
-            "One dihedral per line using four atom numbers. "
-            "Example: torsion_A: 5-6-7-8"
-        ),
-    )
-
-with col_manual2:
-    distance_text = st.text_area(
-        "Distance definitions",
-        value=default_distance_text,
-        height=160,
-        help=(
-            "One atom-atom distance per line using two atom numbers. "
-            "Example: distance_A: 5-8"
-        ),
-    )
-
+# Parse definitions
 try:
     dihedral_definitions = parse_definitions(
         dihedral_text,
@@ -582,37 +428,58 @@ except Exception as e:
     st.stop()
 
 with st.expander("Parsed measurement definitions", expanded=False):
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with c1:
+    with col1:
         st.subheader("Dihedral angles")
         if dihedral_definitions:
             st.dataframe(pd.DataFrame(dihedral_definitions), use_container_width=True)
         else:
-            st.info("No dihedral definitions.")
+            st.info("No dihedral definitions were provided.")
 
-    with c2:
+    with col2:
         st.subheader("Atom-atom distances")
         if distance_definitions:
             st.dataframe(pd.DataFrame(distance_definitions), use_container_width=True)
         else:
-            st.info("No distance definitions.")
+            st.info("No distance definitions were provided.")
+
+if not uploaded_file:
+    st.info("Upload an SDF file to start the calculation.")
+    st.stop()
+
+if not dihedral_definitions and not distance_definitions:
+    st.warning("Please define at least one dihedral angle or atom-atom distance.")
+    st.stop()
+
+# Read SDF
+sdf_text = uploaded_file.getvalue().decode("utf-8", errors="replace")
+supplier = Chem.ForwardSDMolSupplier(
+    StringIO(sdf_text),
+    sanitize=sanitize,
+    removeHs=False,
+)
+
+mols = [mol for mol in supplier if mol is not None]
+
+if len(mols) == 0:
+    st.error("No valid molecules were read from the SDF file.")
+    st.stop()
+
+st.success(f"Successfully read {len(mols)} conformer(s) from the SDF file.")
+
+first_mol = mols[0]
 
 if show_atom_preview:
     with st.expander("Atom-index preview for the first molecule", expanded=True):
+        st.write(
+            "Use this table to confirm whether your atom numbering matches "
+            "the SDF atom order."
+        )
         atom_df = make_atom_index_preview(first_mol)
         st.dataframe(atom_df, use_container_width=True)
 
-if not dihedral_definitions and not distance_definitions:
-    st.info("Add at least one dihedral angle or atom-atom distance.")
-    st.stop()
-
-# =========================
 # Calculate
-# =========================
-
-st.header("3. Results")
-
 try:
     dihedral_df = calculate_dihedrals(
         mols=mols,
@@ -635,6 +502,7 @@ except Exception as e:
     st.error(f"Calculation error: {e}")
     st.stop()
 
+# Results
 tab1, tab2, tab3, tab4 = st.tabs(
     [
         "Dihedral angles",
@@ -677,11 +545,10 @@ with tab2:
 with tab3:
     st.header("Wide-format tables")
 
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    with c1:
+    with col1:
         st.subheader("Dihedral angles, wide format")
-
         if dihedral_df.empty:
             st.info("No dihedral data.")
         else:
@@ -695,9 +562,8 @@ with tab3:
                 mime="text/csv",
             )
 
-    with c2:
+    with col2:
         st.subheader("Atom-atom distances, wide format")
-
         if distance_df.empty:
             st.info("No distance data.")
         else:
@@ -766,7 +632,8 @@ with tab4:
 st.divider()
 
 st.caption(
-    "Notes: The molecule diagram is shown only to help select atom numbers. "
-    "Dihedral angles and distances are calculated from the original 3D coordinates "
-    "stored in the SDF file."
+    "Notes: Dihedral angles are reported in degrees using RDKit's "
+    "GetDihedralDeg function. Atom-atom distances are reported in Å using "
+    "the 3D coordinates stored in the SDF file. Hydrogen atoms are retained "
+    "while reading the SDF file."
 )
